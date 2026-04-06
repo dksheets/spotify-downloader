@@ -333,3 +333,112 @@ def test_song_from_url_with_genres(mock_sc_cls):
     song = Song.from_url("https://open.spotify.com/track/abc123")
 
     assert song.genres == ["rock", "pop"]
+
+
+@patch("spotdl.types.song.SpotifyClient")
+def test_song_from_raw_metadata(mock_sc_cls):
+    """
+    Test that _from_raw_metadata produces the same Song as from_url.
+    """
+    raw_track = _make_raw_track_meta()
+    raw_artist = _make_raw_artist_meta(genres=["pop"])
+    raw_album = _make_raw_album_meta(genres=["rock"])
+
+    song = Song._from_raw_metadata(raw_track, raw_artist, raw_album)
+
+    assert song.name == "Test Song"
+    assert song.artist == "Test Artist"
+    assert song.artist_id == "artist123"
+    assert song.album_id == "album123"
+    assert song.album_name == "Test Album"
+    assert song.genres == ["rock", "pop"]
+    assert song.duration == 180
+    assert song.popularity == 50
+    assert song.isrc == "USTEST0000001"
+
+
+@patch("spotdl.types.song.SpotifyClient")
+def test_song_from_urls_batch(mock_sc_cls):
+    """
+    Test that Song.from_urls() correctly batch-fetches and creates Song objects.
+    """
+    raw_track_1 = _make_raw_track_meta()
+    raw_track_2 = {
+        **_make_raw_track_meta(),
+        "name": "Test Song 2",
+        "id": "def456",
+        "artists": [{"name": "Artist 2", "id": "artist456"}],
+        "album": {"id": "album456"},
+        "external_urls": {"spotify": "https://open.spotify.com/track/def456"},
+    }
+
+    mock_client = MagicMock()
+    mock_client.batch_tracks.return_value = {
+        "abc123": raw_track_1,
+        "def456": raw_track_2,
+    }
+    mock_client.batch_artists.return_value = {
+        "artist123": _make_raw_artist_meta(genres=["pop"]),
+        "artist456": _make_raw_artist_meta(genres=["rock"]),
+    }
+    mock_client.batch_albums.return_value = {
+        "album123": _make_raw_album_meta(genres=["electronic"]),
+        "album456": _make_raw_album_meta(genres=["indie"]),
+    }
+    mock_sc_cls.return_value = mock_client
+
+    songs = Song.from_urls([
+        "https://open.spotify.com/track/abc123",
+        "https://open.spotify.com/track/def456",
+    ])
+
+    assert len(songs) == 2
+    assert songs[0].name == "Test Song"
+    assert songs[0].song_id == "abc123"
+    assert songs[1].name == "Test Song 2"
+    assert songs[1].song_id == "def456"
+
+    # Verify batch methods were called instead of individual ones
+    mock_client.batch_tracks.assert_called_once()
+    mock_client.batch_artists.assert_called_once()
+    mock_client.batch_albums.assert_called_once()
+    mock_client.track.assert_not_called()
+
+
+@patch("spotdl.types.song.SpotifyClient")
+def test_song_from_urls_skips_invalid_tracks(mock_sc_cls):
+    """
+    Test that from_urls() skips tracks that are None or have 0 duration.
+    """
+    raw_track = _make_raw_track_meta()
+    zero_duration_track = {**_make_raw_track_meta(), "id": "zero1", "duration_ms": 0}
+
+    mock_client = MagicMock()
+    mock_client.batch_tracks.return_value = {
+        "abc123": raw_track,
+        # "missing1" not in results — simulates track not found
+    }
+    mock_client.batch_artists.return_value = {
+        "artist123": _make_raw_artist_meta(genres=["pop"]),
+    }
+    mock_client.batch_albums.return_value = {
+        "album123": _make_raw_album_meta(),
+    }
+    mock_sc_cls.return_value = mock_client
+
+    songs = Song.from_urls([
+        "https://open.spotify.com/track/abc123",
+        "https://open.spotify.com/track/missing1",
+    ])
+
+    assert len(songs) == 1
+    assert songs[0].song_id == "abc123"
+
+
+@patch("spotdl.types.song.SpotifyClient")
+def test_song_from_urls_empty_input(mock_sc_cls):
+    """
+    Test that from_urls() returns empty list for empty input.
+    """
+    songs = Song.from_urls([])
+    assert songs == []

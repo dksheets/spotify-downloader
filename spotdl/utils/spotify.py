@@ -10,7 +10,7 @@ spotify.Spotify.init(client_id, client_secret)
 
 import json
 import logging
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 from spotipy import Spotify
@@ -202,6 +202,78 @@ class SpotifyClient(Spotify, metaclass=Singleton):
             self.cache[cache_key] = response
 
         return response
+
+    def batch_tracks(self, track_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Fetch track metadata for multiple track IDs in batches of 50.
+
+        ### Arguments
+        - track_ids: List of Spotify track IDs.
+
+        ### Returns
+        - Dict mapping track ID to raw track metadata.
+        """
+
+        unique_ids = list(dict.fromkeys(track_ids))
+        results: Dict[str, Dict[str, Any]] = {}
+
+        for i in range(0, len(unique_ids), 50):
+            chunk = unique_ids[i : i + 50]
+            response = self.tracks(chunk)
+            if response and response.get("tracks"):
+                for track in response["tracks"]:
+                    if track is not None:
+                        results[track["id"]] = track
+
+        return results
+
+    def batch_artists(self, artist_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Fetch artist metadata for multiple artist IDs in batches of 50.
+
+        ### Arguments
+        - artist_ids: List of Spotify artist IDs.
+
+        ### Returns
+        - Dict mapping artist ID to raw artist metadata.
+        """
+
+        unique_ids = list(dict.fromkeys(artist_ids))
+        results: Dict[str, Dict[str, Any]] = {}
+
+        for i in range(0, len(unique_ids), 50):
+            chunk = unique_ids[i : i + 50]
+            response = self.artists(chunk)
+            if response and response.get("artists"):
+                for artist in response["artists"]:
+                    if artist is not None:
+                        results[artist["id"]] = artist
+
+        return results
+
+    def batch_albums(self, album_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Fetch album metadata for multiple album IDs in batches of 20.
+
+        ### Arguments
+        - album_ids: List of Spotify album IDs.
+
+        ### Returns
+        - Dict mapping album ID to raw album metadata.
+        """
+
+        unique_ids = list(dict.fromkeys(album_ids))
+        results: Dict[str, Dict[str, Any]] = {}
+
+        for i in range(0, len(unique_ids), 20):
+            chunk = unique_ids[i : i + 20]
+            response = self.albums(chunk)
+            if response and response.get("albums"):
+                for album in response["albums"]:
+                    if album is not None:
+                        results[album["id"]] = album
+
+        return results
 
 
 def save_spotify_cache(cache: Dict[str, Optional[Dict]]):

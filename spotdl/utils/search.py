@@ -5,7 +5,6 @@ or by parsing a query.
 To use this module you must first initialize the SpotifyClient.
 """
 
-import concurrent.futures
 import json
 import logging
 import re
@@ -29,6 +28,7 @@ __all__ = [
     "parse_query",
     "get_simple_songs",
     "reinit_song",
+    "reinit_songs",
     "get_song_from_file_metadata",
     "gather_known_songs",
     "create_ytm_album",
@@ -103,17 +103,31 @@ def parse_query(
         playlist_retain_track_cover=playlist_retain_track_cover,
     )
 
-    results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
-        future_to_song = {executor.submit(reinit_song, song): song for song in songs}
-        for future in concurrent.futures.as_completed(future_to_song):
-            song = future_to_song[future]
-            try:
-                results.append(future.result())
-            except Exception as exc:
-                logger.error("%s generated an exception: %s", song.display_name, exc)
+    # Only reinitialize songs that are missing required metadata
+    indices_needing_reinit = [
+        i
+        for i, song in enumerate(songs)
+        if (song.name is None and song.url)
+        or any(
+            x is None
+            for x in [
+                song.genres,
+                song.disc_count,
+                song.tracks_count,
+                song.track_number,
+                song.album_id,
+                song.album_artist,
+            ]
+        )
+    ]
 
-    return results
+    if indices_needing_reinit:
+        to_reinit = [songs[i] for i in indices_needing_reinit]
+        reinitialized = reinit_songs(to_reinit)
+        for idx, new_song in zip(indices_needing_reinit, reinitialized):
+            songs[idx] = new_song
+
+    return songs
 
 
 def get_simple_songs(
@@ -568,6 +582,93 @@ def reinit_song(song: Song) -> Song:
 
     # return reinitialized song object
     return Song(**data)
+
+
+def reinit_songs(songs: List[Song]) -> List[Song]:
+    """
+    Batch update multiple song objects with full metadata from Spotify,
+    using batch API calls to minimize requests.
+
+    ### Arguments
+    - songs: List of Song objects to reinitialize.
+
+    ### Returns
+    - List of reinitialized Song objects in original order.
+    """
+
+    # Partition into batchable (have URL or song_id) and non-batchable songs
+    batchable_indices: List[int] = []
+    batchable_urls: List[str] = []
+    individual_indices: List[int] = []
+
+    for i, song in enumerate(songs):
+        data = song.json
+        if data.get("url"):
+            batchable_indices.append(i)
+            batchable_urls.append(data["url"])
+        elif data.get("song_id"):
+            batchable_indices.append(i)
+            batchable_urls.append(
+                "https://open.spotify.com/track/" + data["song_id"]
+            )
+        else:
+            individual_indices.append(i)
+
+    # Batch fetch songs with URLs
+    results: List[Optional[Song]] = [None] * len(songs)
+
+    if batchable_urls:
+        new_songs = Song.from_urls(batchable_urls)
+
+        # Map fetched songs by URL for lookup
+        new_songs_by_url: Dict[str, Song] = {}
+        for new_song in new_songs:
+            new_songs_by_url[new_song.url] = new_song
+
+        # Merge new metadata into existing song data
+        for idx, url in zip(batchable_indices, batchable_urls):
+            # Normalize URL for lookup (strip query params)
+            track_id = url.split("track/")[-1].split("?")[0]
+            lookup_url = f"https://open.spotify.com/track/{track_id}"
+
+            new_song = new_songs_by_url.get(lookup_url)
+            if new_song is None:
+                # Batch fetch missed this song, fall back to individual
+                try:
+                    results[idx] = reinit_song(songs[idx])
+                except Exception as exc:
+                    logger.error(
+                        "%s generated an exception: %s",
+                        songs[idx].display_name,
+                        exc,
+                    )
+                    results[idx] = songs[idx]
+                continue
+
+            # Merge: prefer existing non-None values, fill in missing from new
+            data = songs[idx].json
+            new_data = new_song.json
+            for key in Song.__dataclass_fields__:  # type: ignore # pylint: disable=E1101
+                val = data.get(key)
+                new_val = new_data.get(key)
+                if new_val is not None and val is None:
+                    data[key] = new_val
+                elif new_val is not None and val is not None:
+                    data[key] = val
+
+            results[idx] = Song(**data)
+
+    # Handle non-batchable songs individually
+    for idx in individual_indices:
+        try:
+            results[idx] = reinit_song(songs[idx])
+        except Exception as exc:
+            logger.error(
+                "%s generated an exception: %s", songs[idx].display_name, exc
+            )
+            results[idx] = songs[idx]
+
+    return [song for song in results if song is not None]
 
 
 def get_song_from_file_metadata(file: Path, id3_separator: str = "/") -> Optional[Song]:
