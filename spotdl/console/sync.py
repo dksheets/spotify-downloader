@@ -11,7 +11,7 @@ from spotdl.download.downloader import Downloader
 from spotdl.types.song import Song
 from spotdl.utils.formatter import create_file_name
 from spotdl.utils.m3u import gen_m3u_files
-from spotdl.utils.search import parse_query
+from spotdl.utils.search import get_simple_songs, parse_query, reinit_songs
 
 __all__ = ["sync"]
 
@@ -108,10 +108,16 @@ def sync(
         ):
             raise ValueError("Sync file is not a valid sync file.")
 
-        # Parse the query
-        songs_playlist = parse_query(
-            query=sync_data["query"],
-            threads=downloader.settings["threads"],
+        # Build lookup of previously synced songs (complete metadata, no API calls)
+        old_songs_by_url = {
+            entry["url"]: entry
+            for entry in sync_data["songs"]
+            if entry.get("url")
+        }
+
+        # Fetch current playlist tracklist (lightweight: only playlist-level API calls)
+        playlist_songs = get_simple_songs(
+            sync_data["query"],
             use_ytm_data=downloader.settings["ytm_data"],
             playlist_numbering=downloader.settings["playlist_numbering"],
             album_type=downloader.settings["album_type"],
@@ -119,6 +125,43 @@ def sync(
                 "playlist_retain_track_cover"
             ],
         )
+
+        # Diff: reuse saved metadata for known songs, collect new songs for fetching
+        songs_playlist = []
+        new_songs = []
+        new_song_indices = []
+        for i, song in enumerate(playlist_songs):
+            old_entry = old_songs_by_url.get(song.url)
+            if old_entry is not None:
+                # Reuse saved song, update playlist position metadata
+                reused = Song.from_dict(old_entry)
+                reused.list_position = song.list_position
+                reused.list_length = song.list_length
+                reused.list_name = song.list_name
+                reused.list_url = song.list_url
+                songs_playlist.append(reused)
+            else:
+                # New song — needs full metadata
+                songs_playlist.append(song)
+                new_songs.append(song)
+                new_song_indices.append(i)
+
+        # Batch-fetch metadata only for genuinely new songs
+        if new_songs:
+            logger.info(
+                "Fetching metadata for %d new songs "
+                "(%d reused from cache)",
+                len(new_songs),
+                len(playlist_songs) - len(new_songs),
+            )
+            reinitialized = reinit_songs(new_songs)
+            for idx, new_song in zip(new_song_indices, reinitialized):
+                songs_playlist[idx] = new_song
+        else:
+            logger.info(
+                "All %d songs found in cache, no API calls needed",
+                len(playlist_songs),
+            )
 
         # Get the names and URLs of previously downloaded songs from the sync file
         old_files = []
