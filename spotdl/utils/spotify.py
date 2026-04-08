@@ -10,6 +10,7 @@ spotify.Spotify.init(client_id, client_secret)
 
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -239,6 +240,7 @@ class SpotifyClient(Spotify, metaclass=Singleton):
                         track = self.track(track_id)
                         if track is not None:
                             results[track["id"]] = track
+                        time.sleep(0.5)
                     except Exception as inner_exc:
                         logger.warning(
                             "Failed to fetch track %s: %s", track_id, inner_exc
@@ -284,6 +286,7 @@ class SpotifyClient(Spotify, metaclass=Singleton):
                         artist = self.artist(artist_id)
                         if artist is not None:
                             results[artist["id"]] = artist
+                        time.sleep(0.5)
                     except Exception as inner_exc:
                         logger.warning(
                             "Failed to fetch artist %s: %s",
@@ -331,6 +334,7 @@ class SpotifyClient(Spotify, metaclass=Singleton):
                         album = self.album(album_id)
                         if album is not None:
                             results[album["id"]] = album
+                        time.sleep(0.5)
                     except Exception as inner_exc:
                         logger.warning(
                             "Failed to fetch album %s: %s",
