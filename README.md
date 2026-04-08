@@ -1,165 +1,183 @@
+# spotDL (dksheets fork)
 
-<!--- mdformat-toc start --slug=github --->
+Fork of [spotDL](https://github.com/spotDL/spotify-downloader) with optimizations for Spotify's February 2026 API changes, smarter sync that avoids rate limiting, and a one-liner macOS installer.
 
-<!---
-!!! IF EDITING THE README, ENSURE TO COPY THE WHOLE FILE TO index.md in `/docs/` AND REMOVE THE REFERENCES TO ReadTheDocs THERE.
---->
+## What's different in this fork
 
-<div align="center">
+- **Smart sync** — reuses cached song metadata from previous runs. Only new playlist additions hit the Spotify API.
+- **Batch API fallback** — tries batch endpoints first, falls back to individual calls when Spotify blocks them (common with dev mode apps).
+- **Rate limit friendly** — removes unnecessary API calls for non-essential metadata (genres, disc_count, publisher). A typical sync of a 300-song playlist with 5 new songs makes ~3 API calls instead of 400+.
+- **February 2026 API fixes** — handles missing `genres`, `popularity`, `publisher`, and `label` fields that Spotify removed from responses.
+- **None-safe metadata embedding** — won't crash when optional fields are missing from playlist-sourced songs.
 
-# spotDL v4
+## Quick install (macOS)
 
-**spotDL** finds songs from Spotify playlists on YouTube and downloads them - along with album art, lyrics and metadata.
+```bash
+curl -sSL https://raw.githubusercontent.com/dksheets/spotify-downloader/master/scripts/install-mac.sh | bash
+```
 
-[![MIT License](https://img.shields.io/github/license/spotdl/spotify-downloader?color=44CC11&style=flat-square)](https://github.com/spotDL/spotify-downloader/blob/master/LICENSE)
-[![PyPI version](https://img.shields.io/pypi/pyversions/spotDL?color=%2344CC11&style=flat-square)](https://pypi.org/project/spotdl/)
-[![PyPi downloads](https://img.shields.io/pypi/dw/spotDL?label=downloads@pypi&color=344CC11&style=flat-square)](https://pypi.org/project/spotdl/)
-![Contributors](https://img.shields.io/github/contributors/spotDL/spotify-downloader?style=flat-square)
-[![Discord](https://img.shields.io/discord/771628785447337985?label=discord&logo=discord&style=flat-square)](https://discord.gg/xCa23pwJWY)
+The installer handles Homebrew, Python, ffmpeg, pipx, and walks you through Spotify API credential setup.
 
-> spotDL: The fastest, easiest and most accurate command-line music downloader.
-</div>
+## Spotify API setup
 
-______________________________________________________________________
-**[Read the documentation on ReadTheDocs!](https://spotdl.readthedocs.io)**
-______________________________________________________________________
+You need your own Spotify API credentials. The shared defaults are heavily rate-limited.
 
-## Installation
+1. Go to https://developer.spotify.com/dashboard
+2. Log in with your Spotify account
+3. Click **Create App**
+4. Fill in:
+   - App name: anything (e.g. `spotdl`)
+   - App description: anything
+   - Redirect URI: `http://127.0.0.1:9900/`
+   - Check **Web API**
+5. Click **Save**, then **Settings** to find your Client ID and Client Secret
 
-Refer to our [Installation Guide](docs/installation.md) for more details.
+Add them to `~/.spotdl/config.json`:
 
-### Python (Recommended Method)
+```json
+{
+    "client_id": "YOUR_CLIENT_ID",
+    "client_secret": "YOUR_CLIENT_SECRET"
+}
+```
 
-- _spotDL_ can be installed by running `pip install spotdl`.
-- To update spotDL run `pip install --upgrade spotdl`
-
-  > On some systems you might have to change `pip` to `pip3`.
-
-<details>
-    <summary style="font-size:1.25em"><strong>Other options</strong></summary>
-
-- Prebuilt executable
-  - You can download the latest version from the
-    [Releases Tab](https://github.com/spotDL/spotify-downloader/releases)
-- On Termux
-  - `curl -L https://raw.githubusercontent.com/spotDL/spotify-downloader/master/scripts/termux.sh | sh`
-- Arch
-  - There is an [Arch User Repository (AUR) package](https://aur.archlinux.org/packages/spotdl/) for
-    spotDL.
-- Docker
-  - Build image:
-
-    ```bash
-    docker build -t spotdl .
-    ```
-
-  - Launch container with spotDL parameters (see section below). You need to create mapped
-    volume to access song files
-
-    ```bash
-    docker run --rm -v $(pwd):/music spotdl download [trackUrl]
-    ```
-
-  - Build from source
-
-    ```bash
-    git clone https://github.com/spotDL/spotify-downloader && cd spotify-downloader
-    pip install uv
-    uv sync
-    uv run scripts/build.py
-    ```
-
-    An executable is created in `spotify-downloader/dist/`.
-
-</details>
-
-### Installing FFmpeg
-
-FFmpeg is required for spotDL. If using FFmpeg only for spotDL, you can simply install FFmpeg to your spotDL installation directory:
-`spotdl --download-ffmpeg`
-
-We recommend the above option, but if you want to install FFmpeg system-wide,
-follow these instructions
-
-- [Windows Tutorial](https://windowsloop.com/install-ffmpeg-windows-10/)
-- OSX - `brew install ffmpeg`
-- Linux - `sudo apt install ffmpeg` or use your distro's package manager
+Or generate a full config with `spotdl --generate-config` and edit the file.
 
 ## Usage
 
-Using SpotDL without options:
+### Download a song or playlist
 
-```sh
-spotdl [urls]
+To get a Spotify link: open Spotify, right-click any song, album, or playlist > **Share** > **Copy Link**.
+
+```bash
+spotdl "https://open.spotify.com/track/..."
+spotdl "https://open.spotify.com/playlist/..."
 ```
 
-You can run _spotDL_ as a package if running it as a script doesn't work:
+### Sync a playlist (recommended for ongoing use)
 
-```sh
-python -m spotdl [urls]
+First run — creates a sync file:
+
+```bash
+spotdl sync "https://open.spotify.com/playlist/YOUR_PLAYLIST_ID" \
+    --save-file ~/spotdl-playlists/myplaylist.spotdl \
+    --output "~/Music/spotdl/{artists} - {title}.{output-ext}"
 ```
 
-General usage:
+Subsequent runs — pass the sync file directly (this uses the smart diff):
 
-```sh
-spotdl [operation] [options] QUERY
+```bash
+spotdl sync ~/spotdl-playlists/myplaylist.spotdl \
+    --output "~/Music/spotdl/{artists} - {title}.{output-ext}"
 ```
 
-There are different **operations** spotDL can perform. The _default_ is `download`, which simply downloads the songs from YouTube and embeds metadata.
+**Important:** Always pass the `.spotdl` file on subsequent syncs, not the playlist URL. Passing the URL re-fetches everything and burns through your API quota.
 
-The **query** for spotDL is usually a list of Spotify URLs, but for some operations like **sync**, only a single link or file is required.
-For a list of all **options** use ```spotdl -h```
+### YouTube Premium quality
 
-<details>
-<summary style="font-size:1em"><strong>Supported operations</strong></summary>
+By default, downloads are 128kbps. With a YouTube Premium account, you get 256kbps. To enable:
 
-- `save`: Saves only the metadata from Spotify without downloading anything.
-    - Usage:
-        `spotdl save [query] --save-file {filename}.spotdl`
+1. Export cookies from youtube.com using a browser extension like [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
+2. Set the cookie path in `~/.spotdl/config.json`:
 
-- `web`: Starts a web interface instead of using the command line. However, it has limited features and only supports downloading individual songs.
+```json
+{
+    "cookie_file": "/path/to/cookies.txt"
+}
+```
 
-- `url`: Get user-friendly URL for each song from the query.
-    - Usage:
-        `spotdl url [query]`
+Cookies expire roughly every 30 days — re-export when download quality drops.
 
-- `sync`: Updates directories. Compares the directory with the current state of the playlist. Newly added songs will be downloaded and removed songs will be deleted. No other songs will be downloaded and no other files will be deleted.
+## Config tips
 
-    - Usage:
-        `spotdl sync [query] --save-file {filename}.spotdl`
+Config lives at `~/.spotdl/config.json`. Key settings:
 
-        This creates a new **sync** file. To update the directory in the future, use:
+```json
+{
+    "save_file": null,
+    "scan_for_songs": false,
+    "fetch_albums": false,
+    "use_cache_file": true,
+    "overwrite": "skip"
+}
+```
 
-        `spotdl sync {filename}.spotdl`
+| Setting | Recommendation | Why |
+|---------|---------------|-----|
+| `save_file` | `null` | Prevents download commands from silently overwriting your sync file. Let your script manage it explicitly. |
+| `scan_for_songs` | `false` | Scans every file on disk against Spotify on each run. Massive API waste. |
+| `fetch_albums` | `false` | Fetches full album for every song. Triggers extra API calls. |
+| `use_cache_file` | `true` | Caches Spotify API responses to disk so repeated runs don't re-fetch. |
+| `overwrite` | `"skip"` | Skips songs that already exist on disk. |
 
-- `meta`: Updates metadata for the provided song files.
+## Setting up a sync script
 
-</details>
+Example shell script for automated syncing (e.g. via Raycast, cron, etc.):
 
-## Music Sourcing and Audio Quality
+```bash
+#!/bin/bash
+PLAYLIST="https://open.spotify.com/playlist/YOUR_PLAYLIST_ID"
+SAVE_FILE="/path/to/myplaylist.spotdl"
+OUTPUT_DIR="/path/to/music"
 
-spotDL uses YouTube as a source for music downloads. This method is used to avoid any issues related to downloading music from Spotify.
+# First run creates the sync file; subsequent runs use the smart diff
+if [ -f "$SAVE_FILE" ]; then
+    spotdl sync "$SAVE_FILE" \
+        --output "$OUTPUT_DIR/{artists} - {title}.{output-ext}"
+else
+    spotdl sync "$PLAYLIST" \
+        --save-file "$SAVE_FILE" \
+        --output "$OUTPUT_DIR/{artists} - {title}.{output-ext}"
+fi
+```
 
-> **Note**
-> Users are responsible for their actions and potential legal consequences. We do not support unauthorized downloading of copyrighted material and take no responsibility for user actions.
+## Troubleshooting
 
-### Audio Quality
+### `403 Forbidden` on batch track endpoints
 
-spotDL downloads music from YouTube and is designed to always download the highest possible bitrate; which is 128 kbps for regular users and 256 kbps for YouTube Music premium users.
+Spotify's February 2026 API changes restrict batch endpoints (`/v1/tracks/?ids=...`) for dev mode apps. This fork automatically falls back to individual calls with a 0.5s delay between requests to avoid triggering rate limits.
 
-Check the [Audio Formats](docs/usage.md#audio-formats-and-quality) page for more info.
+### `SpotifyOauthError: invalid_client`
 
-## Contributing
+Your cached OAuth token was created with different credentials. Clear it:
 
-Interested in contributing? Check out our [CONTRIBUTING.md](docs/CONTRIBUTING.md) to find
-resources around contributing along with a guide on how to set up a development environment.
+```bash
+rm -f ~/.spotdl/.spotipy
+```
 
-### Join our amazing community as a code contributor
+Then re-run — it'll open your browser to re-authenticate.
 
-<a href="https://github.com/spotDL/spotify-downloader/graphs/contributors">
-  <img class="dark-light" src="https://contrib.rocks/image?repo=spotDL/spotify-downloader&anon=0&columns=25&max=100&r=true" />
-</a>
+### `ValueError: Sync file is not a valid sync file`
+
+Your `.spotdl` file got overwritten with a plain song list (usually by a `spotdl download` command while `save_file` was set in your config). Fix by ensuring `save_file` is `null` in your config. To recover the sync file:
+
+```python
+import json
+with open("myplaylist.spotdl") as f:
+    data = json.load(f)
+# If it's a plain list, convert to sync format
+if isinstance(data, list):
+    sync = {"type": "sync", "query": ["YOUR_PLAYLIST_URL"], "songs": data}
+    with open("myplaylist.spotdl", "w") as f:
+        json.dump(sync, f, indent=4)
+```
+
+### `MetadataError: Failed to embed metadata`
+
+Usually caused by None fields in song metadata when downloading from playlist data without full API enrichment. This fork handles None fields gracefully. If you see this on an older install, reinstall from this fork.
+
+### Rate limited (`429` or `403` with retry timer)
+
+- Don't retry while limited — each attempt can reset the 24-hour window
+- Check remaining time: the error message includes `Retry will occur after: N s`
+- On subsequent syncs, the smart diff ensures only new songs hit the API
+
+## Uninstall
+
+```bash
+pipx uninstall spotdl
+```
 
 ## License
 
-This project is Licensed under the [MIT](/LICENSE) License.
+This project is licensed under the [MIT](/LICENSE) License. Based on [spotDL](https://github.com/spotDL/spotify-downloader) by the spotDL contributors.
