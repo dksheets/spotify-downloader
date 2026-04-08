@@ -43,7 +43,12 @@ from spotdl.utils.formatter import create_file_name
 from spotdl.utils.lrc import generate_lrc
 from spotdl.utils.m3u import gen_m3u_files
 from spotdl.utils.metadata import MetadataError, embed_metadata
-from spotdl.utils.search import gather_known_songs, reinit_song, songs_from_albums
+from spotdl.utils.search import (
+    gather_known_songs,
+    reinit_song,
+    reinit_songs,
+    songs_from_albums,
+)
 
 __all__ = [
     "AUDIO_PROVIDERS",
@@ -289,6 +294,33 @@ class Downloader:
             songs = [song for song in songs if song.url not in self.url_archive]
             logger.debug("Filtered %d songs with archive", len(songs))
 
+        # Batch reinitialize songs that are missing essential metadata
+        # (genres and disc_count are optional — not worth extra API calls)
+        songs_needing_reinit = [
+            i
+            for i, song in enumerate(songs)
+            if (song.name is None and song.url)
+            or self.settings["fetch_albums"]
+            or any(
+                x is None
+                for x in [
+                    song.tracks_count,
+                    song.track_number,
+                    song.album_id,
+                    song.album_artist,
+                ]
+            )
+        ]
+
+        if songs_needing_reinit:
+            logger.info(
+                "Batch fetching metadata for %d songs", len(songs_needing_reinit)
+            )
+            to_reinit = [songs[i] for i in songs_needing_reinit]
+            reinitialized = reinit_songs(to_reinit)
+            for idx, new_song in zip(songs_needing_reinit, reinitialized):
+                songs[idx] = new_song
+
         self.progress_handler.set_song_count(len(songs))
 
         # Create tasks list
@@ -446,16 +478,14 @@ class Downloader:
             self.errors.append(f"Song is missing required fields: {song.display_name}")
             return song, None
 
-        # Reinitialize the song object if it's missing metadata
-        # Or if we are fetching albums
+        # Reinitialize the song object if it's missing essential metadata
+        # (genres and disc_count are optional — not worth extra API calls)
         if (
             (song.name is None and song.url)
             or self.settings["fetch_albums"]
             or any(
                 x is None
                 for x in [
-                    song.genres,
-                    song.disc_count,
                     song.tracks_count,
                     song.track_number,
                     song.album_id,

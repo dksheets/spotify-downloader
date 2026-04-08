@@ -3,12 +3,15 @@ Song module that hold the Song and SongList classes.
 """
 
 import json
+import logging
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from rapidfuzz import fuzz
 
 from spotdl.utils.spotify import SpotifyClient
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["Song", "SongList", "SongError"]
 
@@ -100,12 +103,33 @@ class Song:
         raw_album_meta: Dict[str, Any] = spotify_client.album(album_id)  # type: ignore
 
         # create song object
+        return cls._from_raw_metadata(raw_track_meta, raw_artist_meta, raw_album_meta)
+
+    @classmethod
+    def _from_raw_metadata(
+        cls,
+        raw_track_meta: Dict[str, Any],
+        raw_artist_meta: Dict[str, Any],
+        raw_album_meta: Dict[str, Any],
+    ) -> "Song":
+        """
+        Creates a Song object from raw Spotify API metadata dicts.
+
+        ### Arguments
+        - raw_track_meta: Raw track metadata from Spotify API.
+        - raw_artist_meta: Raw artist metadata from Spotify API.
+        - raw_album_meta: Raw album metadata from Spotify API.
+
+        ### Returns
+        - The Song object.
+        """
+
         return cls(
             name=raw_track_meta["name"],
             artists=[artist["name"] for artist in raw_track_meta["artists"]],
             artist=raw_track_meta["artists"][0]["name"],
-            artist_id=primary_artist_id,
-            album_id=album_id,
+            artist_id=raw_track_meta["artists"][0]["id"],
+            album_id=raw_track_meta["album"]["id"],
             album_name=raw_album_meta["name"],
             album_artist=raw_album_meta["artists"][0]["name"],
             album_type=raw_album_meta.get("album_type"),
@@ -114,7 +138,8 @@ class Song:
                 if raw_album_meta["copyrights"]
                 else None
             ),
-            genres=(raw_album_meta.get("genres") or []) + (raw_artist_meta.get("genres") or []),
+            genres=(raw_album_meta.get("genres") or [])
+            + (raw_artist_meta.get("genres") or []),
             disc_number=raw_track_meta["disc_number"],
             disc_count=int(raw_album_meta["tracks"]["items"][-1]["disc_number"]),
             duration=int(raw_track_meta["duration_ms"] / 1000),
@@ -125,17 +150,94 @@ class Song:
             isrc=raw_track_meta.get("external_ids", {}).get("isrc"),
             song_id=raw_track_meta["id"],
             explicit=raw_track_meta["explicit"],
-            publisher=raw_album_meta["label"],
+            publisher=raw_album_meta.get("label"),
             url=raw_track_meta["external_urls"]["spotify"],
-            popularity=raw_track_meta["popularity"],
+            popularity=raw_track_meta.get("popularity"),
             cover_url=(
-                max(raw_album_meta["images"], key=lambda i: i["width"] * i["height"])[
-                    "url"
-                ]
+                max(
+                    raw_album_meta["images"],
+                    key=lambda i: i["width"] * i["height"],
+                )["url"]
                 if raw_album_meta["images"]
                 else None
             ),
         )
+
+    @classmethod
+    def from_urls(cls, urls: List[str]) -> List["Song"]:
+        """
+        Creates Song objects from multiple URLs using batch API calls.
+
+        ### Arguments
+        - urls: List of Spotify track URLs.
+
+        ### Returns
+        - List of Song objects.
+        """
+
+        spotify_client = SpotifyClient()
+
+        # Extract track IDs from URLs
+        track_ids = []
+        for url in urls:
+            if "open.spotify.com" not in url or "track" not in url:
+                logger.warning("Skipping invalid URL: %s", url)
+                continue
+
+            # Extract ID from URL (handle both full URLs and URI formats)
+            track_id = url.split("track/")[-1].split("?")[0]
+            track_ids.append(track_id)
+
+        if not track_ids:
+            return []
+
+        # Batch fetch all track metadata
+        tracks_map = spotify_client.batch_tracks(track_ids)
+
+        # Collect unique artist and album IDs from track metadata
+        artist_ids = []
+        album_ids = []
+        for track_meta in tracks_map.values():
+            if track_meta["artists"]:
+                artist_ids.append(track_meta["artists"][0]["id"])
+            album_ids.append(track_meta["album"]["id"])
+
+        # Batch fetch artist and album metadata
+        artists_map = spotify_client.batch_artists(artist_ids)
+        albums_map = spotify_client.batch_albums(album_ids)
+
+        # Build Song objects
+        songs = []
+        for track_id in track_ids:
+            raw_track_meta = tracks_map.get(track_id)
+            if raw_track_meta is None:
+                logger.warning("Track not found: %s", track_id)
+                continue
+
+            if (
+                raw_track_meta["duration_ms"] == 0
+                or raw_track_meta["name"].strip() == ""
+            ):
+                logger.warning("Track no longer exists: %s", track_id)
+                continue
+
+            primary_artist_id = raw_track_meta["artists"][0]["id"]
+            album_id = raw_track_meta["album"]["id"]
+
+            raw_artist_meta = artists_map.get(primary_artist_id, {})
+            raw_album_meta = albums_map.get(album_id)
+
+            if raw_album_meta is None:
+                logger.warning(
+                    "Album not found for track: %s", raw_track_meta["name"]
+                )
+                continue
+
+            songs.append(
+                cls._from_raw_metadata(raw_track_meta, raw_artist_meta, raw_album_meta)
+            )
+
+        return songs
 
     @staticmethod
     def search(search_term: str):
