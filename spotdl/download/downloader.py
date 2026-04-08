@@ -294,7 +294,8 @@ class Downloader:
             songs = [song for song in songs if song.url not in self.url_archive]
             logger.debug("Filtered %d songs with archive", len(songs))
 
-        # Batch reinitialize songs that are missing metadata
+        # Batch reinitialize songs that are missing essential metadata
+        # (genres and disc_count are optional — not worth extra API calls)
         songs_needing_reinit = [
             i
             for i, song in enumerate(songs)
@@ -303,8 +304,6 @@ class Downloader:
             or any(
                 x is None
                 for x in [
-                    song.genres,
-                    song.disc_count,
                     song.tracks_count,
                     song.track_number,
                     song.album_id,
@@ -479,16 +478,14 @@ class Downloader:
             self.errors.append(f"Song is missing required fields: {song.display_name}")
             return song, None
 
-        # Reinitialize the song object if it's missing metadata
-        # Or if we are fetching albums
+        # Reinitialize the song object if it's missing essential metadata
+        # (genres and disc_count are optional — not worth extra API calls)
         if (
             (song.name is None and song.url)
             or self.settings["fetch_albums"]
             or any(
                 x is None
                 for x in [
-                    song.genres,
-                    song.disc_count,
                     song.tracks_count,
                     song.track_number,
                     song.album_id,

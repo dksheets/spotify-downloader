@@ -146,17 +146,16 @@ def sync(
                 new_songs.append(song)
                 new_song_indices.append(i)
 
-        # Batch-fetch metadata only for genuinely new songs
+        # New songs already have enough metadata from the playlist response
+        # (name, artist, album, duration, cover art, etc.) to search YouTube
+        # and download. Skip reinit to avoid unnecessary Spotify API calls.
         if new_songs:
             logger.info(
-                "Fetching metadata for %d new songs "
-                "(%d reused from cache)",
+                "%d new songs, %d reused from cache — "
+                "skipping extra API calls, using playlist metadata",
                 len(new_songs),
                 len(playlist_songs) - len(new_songs),
             )
-            reinitialized = reinit_songs(new_songs)
-            for idx, new_song in zip(new_song_indices, reinitialized):
-                songs_playlist[idx] = new_song
         else:
             logger.info(
                 "All %d songs found in cache, no API calls needed",
